@@ -1,0 +1,288 @@
+---
+title: "Billboard Top 100 - data analysis"
+author: "Lucie Červenková"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+---
+```{r, eval=TRUE, results='hide', warning=FALSE, message=FALSE}
+library(billboard)
+library(dplyr)
+library(cluster)
+library(magrittr)
+library(ggpubr)
+library(pls)
+data("spotify_track_data")
+```
+
+## What is billboard package?
+Package billboard contains data from songs on chart Billboard Hot 100 in years 1960-2015. It consists of three datasets:
+
+  - **lyrics** - the content is pretty evident from the name.
+  - **spotify_track_data** - track features extracted from Spotify API
+  - **spotify_playlists** - overview of playlists used in this collection
+ 
+Since I am interested in features describing musical elements of the songs, I will be working with **spotify_track_data**.
+
+## Let's see what our data looks like...
+```{r, eval=TRUE}
+colnames(spotify_track_data)
+DT::datatable(dplyr::filter(spotify_track_data, artist_name == "Elton John"),
+      options = list(scrollX = TRUE, pageLength = 5))
+
+```
+  
+  - I selected tracks by *Elton John* :-)
+  - There is a number of columns which contain ID's and links, which are irrelevant for my purpose. Let's get rid of them!
+  
+  
+```{r, eval=TRUE}
+data <- dplyr::select(spotify_track_data, -c("artist_id", "track_id", "explicit", "type", "uri", "track_href", "analysis_url"))
+DT::datatable(dplyr::filter(data, artist_name == "Elton John"),
+      options = list(scrollX = TRUE, pageLength = 5))
+
+```
+
+For the purposes of data analysis I am going to create column "decade" which will come in useful later. 
+```{r, eval=TRUE}
+data$year = as.numeric(data$year)
+data <- data %>% dplyr::mutate(., decade = year - year %% 10)
+
+DT::datatable(dplyr::filter(data, artist_name == "Elton John"),
+      options = list(scrollX = TRUE, pageLength = 5))
+```
+![Amazing! Now we can start analysing.](elton.jpg "Elton is happy")
+
+## Cluster analysis
+  - Since my data set contains so many different styles of music over 6 decades, I would like to see if there is a clear division between them.
+  - For this purpose I will use cluster analysis. Let's start by excluding non-numeric columns and perfom hierarchical clustering.
+```{r, eval=TRUE}
+data.stand <- scale(dplyr::select(data,-c("year", "decade", "artist_name", "track_name")))
+
+d <- dist(data.stand, method = "euclidean")
+
+fit <- hclust(d, method="ward.D") 
+
+plot(fit, labels = FALSE)
+```
+  
+  
+  - In this initial step I wanted to see if there is a way for me to estimate optimal number of clusters for K-means. 
+  - It looks like 3 or 4 could be and option. But let's not jump to conclusions just yet!
+
+```{r, eval=TRUE}
+wssplot <- function(data, nc=15, seed=1234){
+  wss <- (nrow(data)-1)*sum(apply(data,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(data, centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Number of Clusters",
+       ylab="Within groups sum of squares")}
+
+wssplot(data.stand)
+```
+
+
+  - Well... this is not the kind of graph I was hoping for. :D
+  - Initially the curve exponentially decreases, but something strange is happening around 6-10 clusters, where the curve is not so smooth.
+  - I do not have high expectations from this, but I will try with 10 clusters. Hopefully these will reflect differences among songs from different decades!
+
+```{r, eval=TRUE}
+plot(fit,labels = FALSE)
+groups <- cutree(fit, k=10)
+
+rect.hclust(fit, k=10, border="red")
+```
+```{r, eval=TRUE}
+k.means.fit <- kmeans(data.stand, 10)
+
+k.means.fit$cluster[1:978]
+data$decade[1:978]
+```
+  - It is already clear, that decade of the song is not such a factor when it comes to assigning them into groups. 
+
+```{r, eval=TRUE}
+clusplot(data.stand, k.means.fit$cluster, main='2D representation of the Cluster solution',
+         color=TRUE, shade=TRUE) 
+```
+  
+  
+  - This is just a big mess :-(
+  - Moral of the story - you cannot easily label songs based on which decade they are from (at least not from given variables).
+  
+## MANOVA
+  - Having so many data points (songs) can make it hard to orient in them.
+  - Some of the features (variable/columns) are not very self-explanatory, so it would be useful to view some basic explanatory statistics.
+  
+```{r,eval=TRUE}
+data.numeric <- dplyr::select(data, -c('decade', 'year', 'artist_name', 'track_name'))
+summary(data.numeric)
+```
+  
+To me, it always seemed like new songs got significantly shorter compared to older ones. 
+  
+  - Obviously, songs that were too long (e.g. 'Shine On You Crazy Diamond' by *Pink Floyd*, 1975 was 26 minutes long) were not suitable for radio broadcast and therefore are not expected to be abundantly found in this dataset.
+  - However, the longest track in this dataset has a little over 26 minutes ('Tubular Bells - Pt. I' by *Mike Oldfield*, 1974).
+  - The shortest track is only 1 minute long ('Main Title Theme' by *Danny Elfman*, 1996) and is way newer.
+  
+Now, I would like to perform ANOVA over songs from different decades to see if my hypothesis is correct. But first, let's check if my data pass the assumptions.
+
+  1. Normality
+```{r, eval=TRUE}
+data_60s <- data %>% dplyr::filter(., decade == 1960)
+data_70s <- data %>% dplyr::filter(., decade == 1970)
+data_80s <- data %>% dplyr::filter(., decade == 1980)
+data_90s <- data %>% dplyr::filter(., decade == 1990)
+data_00s <- data %>% dplyr::filter(., decade == 2000)
+data_10s <- data %>% dplyr::filter(., decade == 2010)
+
+
+ggqqplot(data_60s$duration_ms)
+ggqqplot(data_70s$duration_ms)
+ggqqplot(data_80s$duration_ms)
+ggqqplot(data_90s$duration_ms)
+ggqqplot(data_00s$duration_ms)
+ggqqplot(data_10s$duration_ms)
+```
+
+  - None of these Q-Q plots suggests that I am dealing with Normal distribution. :-( This is especially evident in 60's and 70's. Probably it is because there were either very long or very short (radio-friendly) songs.
+
+  - Let's exclude 60-80's and try to test normality of later decades.
+  
+```{r, eval=TRUE}
+shapiro.test(data_90s$duration_ms)
+shapiro.test(data_00s$duration_ms)
+shapiro.test(data_10s$duration_ms)
+```
+
+Whoa... in neither of the three decades is the p-value in Shapiro-Wilk normality test bigger than 0.05 and thus I cannot assume normality of the data. 
+
+Let's try to see if any other variables are ANOVA/MANOVA-friendly. In other words, let's take random decade and run Shapiro-Wilk normality test on all other numeric variables.
+
+```{r, eval=TRUE}
+shapiro.test(data_80s$instrumentalness)$p.value
+shapiro.test(data_80s$danceability)$p.value
+shapiro.test(data_80s$energy)$p.value
+shapiro.test(data_80s$loudness)$p.value
+shapiro.test(data_80s$key)$p.value
+shapiro.test(data_80s$speechiness)$p.value
+shapiro.test(data_80s$mode)$p.value
+shapiro.test(data_80s$acousticness)$p.value
+shapiro.test(data_80s$liveness)$p.value
+shapiro.test(data_80s$valence)$p.value
+shapiro.test(data_80s$tempo)$p.value
+shapiro.test(data_80s$time_signature)$p.value
+```
+
+This is surprising. With the amount of data I have I would expect Central Limit Theorem to make the data converge to normality. Since this is not true, I have to give up on ANOVA/MANOVA tests with this data set. 
+
+![](sad_elton.jpg "Sad Elton")
+
+## PCR and Linear Regression
+
+In my dataset there are some *exotic* variables such as 'energy' and 'danceability'. 
+
+One by one, I will investigate, whether they can be predicted using the set of the remaining variables.
+
+
+```{r, eval=TRUE}
+train<-sample(c(T,F),nrow(data.numeric),rep=T)
+test<-(!train)
+```
+
+
+### Energy
+
+```{r, eval=TRUE}
+pcr_model<-pcr(energy~., data = data.numeric, subset = train, scale = T, validation = "CV")
+validationplot(pcr_model, val.type="MSEP")
+```
+
+It looks like 9 or 10 components could be an optimal choice!
+
+```{r, eval=TRUE}
+pcr_prediction_9<-predict(pcr_model, data.numeric[test,], ncomp = 9)
+pcr_prediction_10<-predict(pcr_model, data.numeric[test,], ncomp = 10)
+```
+
+Which one is better? Let's use MSE as an evaluation measure.
+
+```{r, eval=TRUE}
+mean((pcr_prediction_9 - data.numeric$energy[test])^2)
+mean((pcr_prediction_10 - data.numeric$energy[test])^2)
+```
+
+MSE suggests that 10 components is a slightly better choice. :-)
+
+Let's compare this with classical linear regression.
+```{r, eval=TRUE}
+lm_fit<-lm(energy~.,data=data.numeric, subset = train)
+lm_predikce<-predict(lm_fit,data.numeric[test,])
+
+mean((lm_predikce-data.numeric$energy[test])^2)
+```
+
+Linear regression performs even better!
+
+```{r, eval=TRUE}
+summary(lm_fit)
+```
+
+Let's try it again, but this time consider only significant features.
+
+```{r, eval=TRUE}
+data.numeric.subset <- data.numeric %>% dplyr::select(., -c('key', 'mode', 'speechiness'))
+lm_fit<-lm(energy~.,data=data.numeric.subset, subset = train)
+lm_predikce<-predict(lm_fit,data.numeric.subset[test,])
+
+mean((lm_predikce-data.numeric.subset$energy[test])^2)
+```
+
+A little improvement :-)
+
+### Danceability
+
+```{r, eval=TRUE}
+pcr_model<-pcr(danceability~., data = data.numeric, subset = train, scale = T, validation = "CV")
+validationplot(pcr_model, val.type="MSEP")
+```
+
+This time I will select 11 components for PCR.
+
+```{r, eval=TRUE}
+pcr_prediction_11<-predict(pcr_model, data.numeric[test,], ncomp = 11)
+mean((pcr_prediction_11 - data.numeric$danceability[test])^2)
+```
+
+MSE is slightly worse compared to 'energy' prediction, but still looks reasonable.
+
+```{r, eval=TRUE}
+lm_fit<-lm(danceability~.,data=data.numeric, subset = train)
+lm_predikce<-predict(lm_fit,data.numeric[test,])
+
+mean((lm_predikce-data.numeric$danceability[test])^2)
+```
+
+Again, linear regression improves the MSE.
+
+```{r, eval=TRUE}
+summary(lm_fit)
+```
+
+```{r, eval=TRUE}
+data.numeric.subset <- data.numeric %>% dplyr::select(., -c('key', 'instrumentalness'))
+lm_fit<-lm(danceability~.,data=data.numeric.subset, subset = train)
+lm_predikce<-predict(lm_fit,data.numeric.subset[test,])
+
+mean((lm_predikce-data.numeric.subset$danceability[test])^2)
+```
+
+Minor improvement again. :-)
+
+![](elton_party.jpg "Party Elton")
+
+## Conclusion
+
+While an average person can tell the difference between song from 60's and song from 10's after hearing them for a first time, it is a subjective impression which cannot be easily quantified. Even though, there are many different genres of songs, variables such as 'tempo', 'key' and 'speechiness' are not enough to spot a clear division between them. One could argue, if such strict division exists at all, since past 70 years of music proved to yield number of crossover genres (a good example of this could be 'Bohemian Rhapsody' by *Queen*). Such diversity can also be the reason for unconventional distribution of the data. On the other hand, I succeeded in showing that variables 'energy' and 'danceability' can be predicted using a large number of features (suggesting polynomial relation, perhaps).
+
+To sum up, music is a beautiful and diverse form of art which can hardly be explained using mathematical measurements. Perhaps, that is why different people prefer different kind of music and one cannot possibly tell, which one is the best (genre-wise or decade-wise). Instead of fighting about it, we'd all better calm down and listen to *Elton John*. :-)
