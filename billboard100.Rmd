@@ -21,6 +21,8 @@ Package billboard contains data from songs on chart Billboard Hot 100 in years 1
   - **lyrics** - the content is pretty evident from the name.
   - **spotify_track_data** - track features extracted from Spotify API
   - **spotify_playlists** - overview of playlists used in this collection
+  
+[View documentation](billboard.pdf)
  
 Since I am interested in features describing musical elements of the songs, I will be working with **spotify_track_data**.
 
